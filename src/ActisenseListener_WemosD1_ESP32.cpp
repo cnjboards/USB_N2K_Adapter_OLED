@@ -25,8 +25,7 @@
 #include <N2KDeviceList.h>
 #include <Wire.h>
 #include <U8g2lib.h>
-#include "i2c_scanner.h"
-#include <ESP32Encoder.h> // https://github.com/madhephaestus/ESP32Encoder.git 
+#include <WebServer.h>
 
 // Instantiate display, use HW I2C
 #ifdef SSD1306
@@ -61,21 +60,45 @@ Stream *ForwardStream=&FORWARD_STREAM;
 void HandleStreamN2kMsg(const tN2kMsg &);
 void displayDriverTask(void *parameter);
 
+// externs from otaWeb
+extern void otaSetup(void);
+extern WebServer server;
+extern bool startUpDelayDone;
+extern bool fileUploadStarted;
+
+// use this for N2K
+u_int32_t chipId;
+
 // 
 void setup() {
+
+  uint8_t chipid [ 6 ];
+
+  // derive a unique chip id from the burned in MAC address
+  esp_efuse_mac_get_default ( chipid );
+  for ( int i = 0 ; i < 6 ; i++ )
+  chipId += ( chipid [ i ] << ( 7 * i ));
+
+  // setup ota stuff
+  otaSetup();
 
   // Define buffers big enough
   NMEA2000.SetN2kCANSendFrameBufSize(500);
   NMEA2000.SetN2kCANReceiveFrameBufSize(500);
   
-  if (ReadStream!=ForwardStream) READ_STREAM.begin(115200);
+  if (ReadStream!=ForwardStream) 
+      READ_STREAM.begin(115200);
+
   FORWARD_STREAM.begin(115200);
   NMEA2000.SetForwardStream(ForwardStream); 
   NMEA2000.SetMode(tNMEA2000::N2km_ListenAndSend);
-  // NMEA2000.SetForwardType(tNMEA2000::fwdt_Text); // Show bus data in clear text
-  if (ReadStream==ForwardStream) NMEA2000.SetForwardOwnMessages(false); // If streams are same, do not echo own messages.
-  // NMEA2000.EnableForward(false);
-  locN2KDeviceList = new tN2kDeviceList(&NMEA2000); // capture who is on N2K bus, should have at least 1
+   
+  // If streams are same, do not echo own messages.
+  if (ReadStream==ForwardStream) 
+      NMEA2000.SetForwardOwnMessages(false);
+  
+  // capture who is on N2K bus, should have at least 1
+  locN2KDeviceList = new tN2kDeviceList(&NMEA2000); 
   NMEA2000.Open();
 
   // I originally had problem to use same Serial stream for reading and sending.
@@ -84,10 +107,10 @@ void setup() {
   ActisenseReader.SetDefaultSource(43);
   ActisenseReader.SetMsgHandler(HandleStreamN2kMsg); 
 
-  // task for the display
+  // task for the I2C display
   xTaskCreatePinnedToCore(
     displayDriverTask, 
-    "Task for display",
+    "Display Task",
     4096, 
     NULL, 
     15, 
@@ -102,6 +125,10 @@ void HandleStreamN2kMsg(const tN2kMsg &N2kMsg) {
 
 // handle all N2K stuff in main loop
 void loop() {
+  
+  // web ota stuff
+  server.handleClient();
+
   NMEA2000.ParseMessages(); // from n2k bus?
   ActisenseReader.ParseMessages(); // from USB serial
   // record the number of devices on n2k bus
@@ -112,25 +139,6 @@ void loop() {
 // NMEA2000 stuff for cpu cycles
 void displayDriverTask(void *parameter) {
 
-  #ifdef ROTENC
-  // setup discrete inputs
-  pinMode(CON, INPUT_PULLUP);
-  pinMode(BCK, INPUT_PULLUP);
-  pinMode(ROTPB, INPUT_PULLUP);
-
-  myEncoder.attachHalfQuad ( DT, CLK );
-  myEncoder.setCount ( 0 );
-  #endif
-  // use to debug I2C
-  #ifdef I2CSCAN
-  I2CScanner myScan;
-  while(true) {
-    myScan.Init();
-    myScan.Scan();
-    vTaskDelay(pdMS_TO_TICKS(2000));    
-  } // end while
-  #endif
-
   #ifdef USE_DISPLAY
   // try fast I2C speed
   u8g2.setBusClock(400000);
@@ -140,21 +148,26 @@ void displayDriverTask(void *parameter) {
   // loop for handling updating the display
   while (true) {
     u8g2.clearBuffer();					// clear the internal memory
-    u8g2.setFont(u8g2_font_9x18B_tf);	// choose a suitable font
-    #ifdef ROTENC
-    sprintf((char *)&dispString, "POSN: %05d", (int)(myEncoder.getCount() / 2));
-    u8g2.drawStr(5,20,(char *)&dispString);	// write something to the internal memory
-    #else
-    sprintf((char *)&dispString, "Devices:  %03d", n2kConnected);
-    u8g2.drawStr(5,20,(char *)&dispString);	// write something to the internal memory
-    #endif
-
-    sprintf((char *)&dispString, "Can Rx: %05d", canRxFrame);
-    u8g2.drawStr(5,40,(char *)&dispString);	// write something to the internal memory
-    sprintf((char *)&dispString, "Can Tx: %05d", canTxFrame);
-    u8g2.drawStr(5,60,(char *)&dispString);	// write something to the internal memory
+    // display update
+    if (fileUploadStarted != true) {
+      u8g2.setFont(u8g2_font_9x18B_tf);	// choose a suitable font
+      // display devices
+      sprintf((char *)&dispString, "Devices:  %03d", n2kConnected);
+      u8g2.drawStr(5,20,(char *)&dispString);	// write something to the internal memory
+      // display packet counts
+      sprintf((char *)&dispString, "Can Rx: %05d", canRxFrame);
+      u8g2.drawStr(5,40,(char *)&dispString);	// write something to the internal memory
+      sprintf((char *)&dispString, "Can Tx: %05d", canTxFrame);
+      u8g2.drawStr(5,60,(char *)&dispString);	// write something to the internal memory
+    } else {
+      // display devices
+      sprintf((char *)&dispString, "Upload In");
+      u8g2.drawStr(5,30,(char *)&dispString);	// write something to the internal memory
+      // display packet counts
+      sprintf((char *)&dispString, "Progress");
+      u8g2.drawStr(5,50,(char *)&dispString);	// write something to the internal memory
+    } // end if
     u8g2.sendBuffer();					// transfer internal memory to the display
-
     // add a small delay to yield
     vTaskDelay(pdMS_TO_TICKS(500));
   } // end loop

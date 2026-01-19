@@ -1,18 +1,8 @@
 // define to include or exclude the display code
 #define USE_DISPLAY
-#define SSD1306
 
-//   Demo: NMEA2000 library. Bus listener and sender. 
-//   Sends all bus data to serial in Actisense format.
-//   Send all data received from serial in Actisense format to the N2kBus.
-//   Use this e.g. with NMEA Simulator (see. http://www.kave.fi/Apps/index.html) to send simulated data to the bus.
-//   I have plans to add receiving functionality and data forwarding to NMEA Simulator. Meanwhile you can define
-//   other stream to different port so that you can send data with NMEA Simulator and listen it on other port with 
-//   Actisense NMEA Reader.
-
-//#define N2k_CAN_INT_PIN 21
-#define ESP32_CAN_TX_PIN GPIO_NUM_5 // If you use ESP32 and do not have TX on default IO 16, uncomment this and and modify definition to match your CAN TX pin.
-#define ESP32_CAN_RX_PIN GPIO_NUM_4 // If you use ESP32 and do not have RX on default IO 4, uncomment this and and modify definition to match your CAN TX pin.
+#define ESP32_CAN_TX_PIN GPIO_NUM_5
+#define ESP32_CAN_RX_PIN GPIO_NUM_4
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -28,15 +18,21 @@
 #include <WebServer.h>
 
 // Instantiate display, use HW I2C
-#ifdef SSD1306
+#ifdef USE_DISPLAY
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ 32, /* data=*/ 33); // for rev .9 of usb n2k board
 #endif
 
 // buffer used for displaying text
 volatile char dispString[64] = {0};
 
+// N2K device list and misc stuff
 tN2kDeviceList *locN2KDeviceList;
 uint8_t n2kConnected = 0; // # stations on bus
+tActisenseReader ActisenseReader;
+#define READ_STREAM Serial       
+#define FORWARD_STREAM Serial    
+Stream *ReadStream=&READ_STREAM;
+Stream *ForwardStream=&FORWARD_STREAM;
 
 // tweaked the NMEA2000_ESP32 driver to count tx/rx frames. Ugly but works.
 // files from the "extras" directory need to be copied into the library once
@@ -44,17 +40,6 @@ uint8_t n2kConnected = 0; // # stations on bus
 // modified file NMEA2000_ESP32.cpp and NMEA2000_ESP32.h to include 2 global counts of RX and TX Can frames
 extern uint16_t canRxFrame;
 extern uint16_t canTxFrame;
-
-// used for N2K
-tActisenseReader ActisenseReader;
-
-// Define READ_STREAM to port, where you write data from PC e.g. with NMEA Simulator.
-#define READ_STREAM Serial       
-// Define ForwardStream to port, what you listen on PC side. On Arduino Due you can use e.g. SerialUSB
-#define FORWARD_STREAM Serial    
-
-Stream *ReadStream=&READ_STREAM;
-Stream *ForwardStream=&FORWARD_STREAM;
 
 // forward declaration
 void HandleStreamN2kMsg(const tN2kMsg &);
@@ -69,7 +54,7 @@ extern bool fileUploadStarted;
 // use this for N2K
 u_int32_t chipId;
 
-// 
+// main setup for Arduino like code
 void setup() {
 
   uint8_t chipid [ 6 ];
@@ -123,7 +108,7 @@ void HandleStreamN2kMsg(const tN2kMsg &N2kMsg) {
   NMEA2000.SendMsg(N2kMsg,-1);
 } 
 
-// handle all N2K stuff in main loop
+// handle all N2K stuff in main Arduino loop
 void loop() {
   
   // web ota stuff
@@ -136,7 +121,7 @@ void loop() {
 } // end loop
 
 // Task to handle the display, make sure priority is low so we dont starve
-// NMEA2000 stuff for cpu cycles
+// N2K stuff
 void displayDriverTask(void *parameter) {
 
   #ifdef USE_DISPLAY

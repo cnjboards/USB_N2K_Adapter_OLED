@@ -120,6 +120,14 @@ void loop() {
   n2kConnected = locN2KDeviceList->Count();
 } // end loop
 
+// hack to improve the esp32 adc linearity
+double ReadVoltage(byte pin){
+  double reading = analogRead(pin); // Reference voltage is 3v3 so maximum reading is 3v3 = 4095 in range 0 to 4095
+  if(reading < 1 || reading > 4095) return 0;
+  // return -0.000000000009824 * pow(reading,3) + 0.000000016557283 * pow(reading,2) + 0.000854596860691 * reading + 0.065440348345433;
+  return -0.000000000000016 * pow(reading,4) + 0.000000000118171 * pow(reading,3)- 0.000000301211691 * pow(reading,2)+ 0.001109019271794 * reading + 0.034143524634089;
+} // Added an improved polynomial, use either, comment out as required
+
 // Task to handle the display, make sure priority is low so we dont starve
 // N2K stuff
 void displayDriverTask(void *parameter) {
@@ -129,16 +137,25 @@ void displayDriverTask(void *parameter) {
   u8g2.setBusClock(400000);
   // start the display, on I2C at address 3C
   u8g2.begin();
+  double volts=0;
+  uint16_t voltsRaw;
+  // for better accuracy
+  analogSetAttenuation(ADC_11db);
 
   // loop for handling updating the display
   while (true) {
-    u8g2.clearBuffer();					// clear the internal memory
+    u8g2.clearBuffer();				// clear the internal memory
     // display update
     if (fileUploadStarted != true) {
+
+      // read voltage and then adjust based on resister divider
+      volts = (float)ReadVoltage(GPIO_NUM_35)*4.8;
+
       u8g2.setFont(u8g2_font_9x18B_tf);	// choose a suitable font
       // display devices
-      sprintf((char *)&dispString, "Devices:  %03d", n2kConnected);
-      u8g2.drawStr(5,20,(char *)&dispString);	// write something to the internal memory
+      sprintf((char *)&dispString, "St:%03d %05.2fV", n2kConnected, volts);
+      //sprintf((char *)&dispString, "St:%03d %04d", n2kConnected, voltsRaw);
+      u8g2.drawStr(3,20,(char *)&dispString);	// write something to the internal memory
       // display packet counts
       sprintf((char *)&dispString, "Can Rx: %05d", canRxFrame);
       u8g2.drawStr(5,40,(char *)&dispString);	// write something to the internal memory

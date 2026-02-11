@@ -12,7 +12,7 @@ bool startUpDelayDone=false;
 bool fileUploadStarted=false;
 const char *host = "esp32";
 const char *ssid = "n2kusb";
-const char *password = "12345";
+const char *password = "1Qwerty!";
 
 // used for ota updates
 WebServer server(80);
